@@ -1,211 +1,569 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <math.h>
+#include "rebound.h"
+#include <time.h>
+#include <sys/time.h>
 
-#define MAX_BUFFER 204800 
-#define Baptisiyina_member 40
-#define R 10
-#define Rotation "Retrograde"
+struct timespec start_time, recent_time;
+time_t t_start, t_end;
 
-int main() {
-// ファイル名用のバッファを用意
-    char name_a[64];
-    char name_e[64];
+const double G = 6.67430E-11;    // gravitational constant [m^3 / kg / s^2]
+const double au = 149597870700;  // astronomical unit [m]
+const double d = 86400;          // Julian day [s]
+const double y = 365.25;         // Julian year [d]
+const double sigma = 5.6698E-8;  // Stefan-Boltzmann constant [W m^-2 K^-4]
+const double c = 299792458;      // speed of light in vacuum [m s^-1]
+const double Fe = 1378;          // solar flux constant at 1AU [W m^-2]
+//const double Msun = 1.98841E+30; // solar mass [kg]
+#define Baptisiyina_member 1
+//const int N = 1;              // number of particles
 
-    // 数字を埋め込んでファイル名を作成
-    // Baptisiyina_member が 40 なら "N40Rda10.txt" になる
-    sprintf(name_a, "N%dRda%d.txt", Baptisiyina_member, R);
-    sprintf(name_e, "N%dRde%d.txt", Baptisiyina_member, R);
+const double kappa = 1.5;               // thermal conductivity [W m^-1 K^-1]
+const double Cp = 682;                   // specific heat [J kg^-1 K^-1]
+const double rho = 3220;                 // density [kg m^-3]
+const double eps = 1.0;                  // thermal emissivity
+const double Ab = 0.1;                 // albedo
+const double rad = 10;                 // asteroid radius [m]
+const double P = 5 * 3600;           // rotational period [s]
+//const double P = 5 * 3600 * (rad / 500);           // rotational period [s]
+const double bx = 0.0;                   // x component of rotational axis
+const double by = 0.0;                   // y component of rotational axis
+const double bz = -1.0;                   // z component of rotational axis
 
-    // 作成したファイル名で open する
-    FILE *fa = fopen(name_a, "r");
-    FILE *fe = fopen(name_e, "r");
-    
-    // 2. 出力ファイル (.plt) の作成
-    FILE *fout = fopen("animation.plt", "w");
+double b[3];                             // rotational axis
 
-    if (fa == NULL || fe == NULL) {
-        fprintf(stderr, "Error: file.txt が見つかりません。\n");
-        if (fout) fclose(fout);
-        if (fa) fclose(fa);
-        if (fe) fclose(fe);
-        return 1;
+const double tmax = 160 * 1E+6 * y * d;        // maximum integration time
+
+const int size = 1000;
+//double tlog[Baptisiyina_member][size];           // time logs
+//struct reb_vec3d plog[Baptisiyina_member][size]; // position logs
+
+double ss_pos[9][3] = 
+{
+    {-1.067706805380953E+06 , -4.182752718194473E+05 , 3.086181725476820E+04 },  //sun
+    {-2.052943316123468E+07 , -6.733155053534345E+07 , -3.648992526494771E+06 }, //Mercury
+    {-1.085242008575715E+08 , -5.303290247691983E+06 , 6.166496116973171E+06 },  //Venus
+    {-2.756674048281145E+07 , 1.442790215207299E+08 , 3.025066782881320E+04},    //Earth
+    {2.069804338364514E+08 , -2.425327900043258E+06 , -5.125427142018680E+06 },  //Mars
+    {5.974998767925479E+08 , 4.391864532202049E+08 , -1.519599883576381E+07 },   //Jupiter
+    {9.573174174143425E+08 , 9.824381819394076E+08 , -5.518218567454088E+07 },   //Saturn
+    {2.157907312953845E+09 , -2.055043522509252E+09 , -3.559462760241723E+07},   //Uranus
+    {2.513978721723721E+09 , -3.739132788548089E+09 , 1.906313375764561E+07},    //Neptune
+    //{2.988033041784385E+08 ,  1.758821404197263E+08 , 1.442269300163002E+07}, //Baptistina
+
+};
+double ss_vel[9][3] = 
+{
+    {9.312571926520472E-03 , -1.282475570794162E-02 , -1.633507186350417E-04}, 
+    {3.700430442920571E+01 , -1.117724068132644E+01 , -4.307791469376854E+00 }, 
+    {1.391218601189967E+00 , -3.515311993215464E+01 , -5.602056890007159E-01 },
+    {-2.978494749851088E+01 , -5.482119695478543E+00 ,  1.843295986780902E-05 }, 
+    {1.171985008531777E+00  , 2.628323978397636E+01 ,  5.221336559764609E-01 }, 
+    {-7.900525116640771E+00  , 1.114330834163639E+01 ,  1.306993263541205E-01 }, 
+    {-7.422709426014511E+00  , 6.723088956951871E+00 ,  1.780864069576586E-01}, 
+    {4.646336807878125E+00  , 4.614832825625936E+00 , -4.305510952280978E-02 }, 
+    {4.475214621751308E+00  , 3.063802317434378E+00 , -1.662267093013879E-01}, 
+    //{-1.124440084494025E+01 ,  1.549674040855631E+01  , 1.871277920702188E+00},
+};
+
+double ss_mass[9] =
+{
+        132712440041.279419, // Sun
+        22031.868551,        // Mercury
+        324858.592000,       // Venus
+        398600.435507,       // Earth
+        42828.375816,        // Mars 
+        126712764.100000,    // Jupiter     
+        37940584.841800,     // Saturn 
+        5794556.400000,      // Uranus 
+        6836527.100580,      // Neptune 
+        //0.000000000000000,   // Baptistina (massless)
+};
+
+void heartbeat(struct reb_simulation *r);
+void yarkovsky_forces(struct reb_simulation *r);
+void get_amplitude_and_lag(double nu, double T0, double *amp, double *lag, double rad); // Yarkovskyの力の振幅と遅れ角を計算
+void unorm(double vin[3], double vout[3]); //ベクトルを正規化
+void vcrss(double v1[3], double v2[3], double vout[3]); //ベクトルの外積
+double vdot(double v1[3], double v2[3]); //ベクトルの内積
+double vnorm(double v[3]); //ベクトルの長さ
+int GetRandom(int min, int max); // minからmaxまでのランダムな整数を取得
+
+int main(int argc, char *argv[])
+{
+    clock_gettime(CLOCK_REALTIME, &start_time);
+    t_start = time(NULL);
+
+    struct reb_simulation *r = reb_simulation_create();
+
+    // Starting the REBOUND visualization server.
+    //reb_simulation_start_server(r, 1234);
+
+    r->heartbeat = heartbeat;
+    r->integrator = REB_INTEGRATOR_WHFAST;
+    r->G = G;        // in m^3 / kg / s^2.
+    r->N_active = 9; // number of active particles
+    r->dt = 4 * d;  // timestep
+    r->additional_forces = yarkovsky_forces;
+
+    // Initial conditions 
+    for (int i=0;i<r->N_active;i++){
+        struct reb_particle p = {0};
+        p.x  = ss_pos[i][0] * 1E+3;         p.y  = ss_pos[i][1] * 1E+3;         p.z  = ss_pos[i][2] * 1E+3;
+        p.vx = ss_vel[i][0] * 1E+3;         p.vy = ss_vel[i][1] * 1E+3;         p.vz = ss_vel[i][2] * 1E+3;
+        p.m  = ss_mass[i] / G * 1E+9;
+        if (i == 1) p.hash = reb_hash("Mercury");
+            else if (i == 2) p.hash = reb_hash("Venus");
+            else if (i == 3) p.hash = reb_hash("Earth");
+            else if (i == 4) p.hash = reb_hash("Mars");
+            else if (i == 5) p.hash = reb_hash("Jupiter");
+            else if (i == 6) p.hash = reb_hash("Saturn");
+            else if (i == 7) p.hash = reb_hash("Uranus");
+            else if (i == 8) p.hash = reb_hash("Neptune");
+
+        reb_simulation_add(r, p); 
     }
 
-    // 時間データを一時保存するためのファイル（メモリ上の仮想ファイル）
-    FILE *ftemp_times = tmpfile(); 
-    if (!ftemp_times) {
-        fprintf(stderr, "Error: 一時ファイルを作成できません。\n");
-        return 1;
+
+    // Add Baptistina members
+    double base_x, base_y, base_z, base_vx, base_vy, base_vz;
+    srand((unsigned int)time(NULL));
+    //double a = 2.264153318519879 * au;
+    //double e = 0.09513326541022031;
+    base_x = 2.988033040327775E+08;
+    base_y = 1.758821406333592E+08;
+    base_z = 1.442269303130877E+07;
+    base_vx = -1.124440085715684E+01;
+    base_vy = 1.549674040109306E+01;
+    base_vz = 1.871277920071504E+00;
+
+    for(int i=0; i<Baptisiyina_member; i++){
+        struct reb_particle members = {0};
+        members.r = rad;
+        members.m = 0.0;
+        members.x = base_x * 1E+3;     members.y = base_y * 1E+3;     members.z = base_z * 1E+3;
+        members.vx = base_vx * 1E+3 + GetRandom(-5,5);     members.vy  = base_vy * 1E+3 + GetRandom(-5,5);     members.vz = base_vz * 1E+3 + GetRandom(-5,5);
+        members.hash = i + 1;
+        reb_simulation_add(r, members);
     }
 
-    printf("Generating animation.plt ...\n");
+    reb_simulation_move_to_com(r);
 
-    // --- Gnuplot ヘッダー設定 ---
-    fprintf(fout, "# Gnuplot Animation Script Generated by C\n");
-    fprintf(fout, "reset\n");
+    FILE* fyark = fopen("Yarkovsky_Check.txt","w");
+    // ヘッダー（項目名）を書き込んでおく
+    fprintf(fyark, "# Time[yr] ID Distance from Sun[AU] Velocity[m/s] T0[K] Amplitude[Cd] Lag_angle[ed] Accel_mag[m/s^2] ax[m/s^2] ay[m/s^2] az[m/s^2]\n");
+    fclose(fyark);
+
+    FILE* fa = fopen("N1Pda10.txt","w");
+    fclose(fa);
+    FILE* fe = fopen("N1Pde10.txt","w");
+    fclose(fe);
+    FILE* fi = fopen("N1Pdi10.txt","w");
+    fclose(fi);
+    FILE* fO = fopen("N1PdO10.txt","w");
+    fclose(fO);
+    FILE* fo = fopen("N1Pdw10.txt","w");
+    fclose(fo);
+    FILE* ff = fopen("N1Pdf10.txt","w");
+    fclose(ff);
+
+
+    FILE* Pa = fopen("Planeta.txt","w");
+    fclose(Pa);
+    FILE* Pe = fopen("Planete.txt","w");
+    fclose(Pe);
+    FILE* Pi = fopen("Planeti.txt","w");
+    fclose(Pi);
+    FILE* PO = fopen("PlanetO.txt","w");
+    fclose(PO);
+    FILE* Po = fopen("Planetw.txt","w");
+    fclose(Po);
+    FILE* Pf = fopen("Planetif.txt","w");
+    fclose(Pf);
+
+    reb_simulation_integrate(r, tmax);
+    t_end = time(NULL);
+
+    //struct reb_particle sun = r->particles[0];
     
-    // GIFアニメーションの設定 (delayは1/100秒単位。10=0.1秒)
-    fprintf(fout, "set terminal gif animate delay 10 size 900,600 optimize\n");
-    fprintf(fout, "set output '%s_evolutionN%dr%d.gif'\n", Rotation, Baptisiyina_member, R);
-    fprintf(fout, "\n");
+    //FILE* f = fopen("da.txt","w");
 
-    // グラフのデザイン設定
-    fprintf(fout, "set grid\n");
-    fprintf(fout, "set tics font 'Arial,13'\n");
-    fprintf(fout, "set xlabel 'Semi-major axis a [AU]' font 'Arial,20'\n");
-    fprintf(fout, "set ylabel 'Eccentricityfont' font 'Arial,20' offset 2.0,0\n");
+    /*for(int i=1; i<=N; i++){
+    struct reb_particle p = r->particles[i];
+    struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun);
+    fprintf(f, "%.2e %.5e\n", p.r, fabs(o.a - a) / au);
+    //printf("%.2e %.5e\n", p.r, fabs(o.a - a) / au);
+    }*/
+    printf("Elapsed time: %ld sec\n", t_end - t_start);
 
-    fprintf(fout, "set label 1 \"Retrograde Rotation\\nR = 10[m]\" at screen 0.5, 0.87 center font 'Arial,20'\n");
+    reb_simulation_free(r);
+}
 
-    // タイトルと重ならないように、グラフの余白を少し下に下げる
-    //fprintf(fout, "set tmargin 5\n");
+void heartbeat(struct reb_simulation *r)
+{
+    if(reb_simulation_output_check(r, 16000.0 * y * d)){
+        clock_gettime(CLOCK_REALTIME, &recent_time);
+        printf("\n");
+        printf("%fsec have passed.",(double)recent_time.tv_sec - (double)start_time.tv_sec);
+    }
 
-    //fprintf(fout, "set title offset 30,-6\nunset key\n");
-
-
-    // ★ここがポイント: X軸の目盛りに特定の数値を追加★
-    // set xtics add ("表示したい文字" 数値)
-    // テキスト色を赤にして目立たせています
-    fprintf(fout, "set xtics add ('2.2545' 2.2545)\n");
-
-    // ★追加: 2.2545 AU に縦線を引く設定
-    // from ... to ... : 始点と終点
-    // graph 0 to graph 1 : グラフの下端から上端まで
-    // nohead : 矢印にしない
-    // lc rgb "red" : 赤色
-    // dt 2 : 破線 (dashed type)
-    // lw 2 : 線の太さ
-    //fprintf(fout, "set arrow from 2.2545, graph 0 to 2.2545, graph 1 nohead lc rgb 'red' dt (10,10) lw 2\n");
-    
-    // 凡例を追加（必要なら）
-    fprintf(fout, "set label 'J7:2/M5:9' at 2.2545, graph 0.95 center offset 0,0.5 tc rgb 'red'\n");
-    
-    // 軸の範囲 (元のコードの設定を維持)
-    fprintf(fout, "set xrange [0.5:2.3]\n"); 
-    fprintf(fout, "set yrange [0.0:1.0]\n");
-
-    // N個の粒子に異なる色を割り当てるため
-    fprintf(fout, "set palette rgbformulae 33,13,10\n");
-    fprintf(fout, "unset colorbox\n"); // 右側のカラーバーは非表示（邪魔なので）
-    fprintf(fout, "set cbrange [0:%d]\n", Baptisiyina_member); // 0番からN番までの色を固定
-    
-    // ポイントのスタイル
-    fprintf(fout, "set style line 1 lc rgb 'blue' pt 7 ps 1.0\n");
-    fprintf(fout, "\n");
-
-    //曲線のスタイル (赤線) と関数の定義を追加
-    fprintf(fout, "set style line 2 lw 0.01 dt 2\n");
-    fprintf(fout, "set style line 3 lw 0.01\n"); 
-
-    fprintf(fout, "mq(x) = 1 - 1.3/x\n");
-    fprintf(fout, "eq(x) = 1 - 1.0/x\n");
-    fprintf(fout, "eQ(x) = 1.0/x - 1\n");
-    
-    fprintf(fout, "\n");
-
-    // --- データブロックの開始 ---
-    fprintf(fout, "$DATA << EOD\n");
-
-    char buf_a[MAX_BUFFER];
-    char buf_e[MAX_BUFFER];
-    int steps = 0;
-
-    // データの読み込みと書き込み
-    while (fgets(buf_a, MAX_BUFFER, fa) != NULL && fgets(buf_e, MAX_BUFFER, fe) != NULL) {
+    if (reb_simulation_output_check(r, 160000.0 * y * d))
+    {
         
-        char *ptr_a = buf_a;
-        char *ptr_e = buf_e;
-        char *end_a;
-        char *end_e;
+        printf("%f %%", r->t / tmax * 100);
 
-        // 1列目：時間 (t) を読み取る
-        double t_val = strtod(ptr_a, &end_a);
-        double t_e_val = strtod(ptr_e, &end_e); // eの方も時間は読み捨てるが進める
+        // 1. バッファ（一時保存場所）の確保
+        // マクロ Baptisiyina_member の数だけ確保します
+        double *buf_a = (double*)malloc(sizeof(double) * (Baptisiyina_member));
+        double *buf_e = (double*)malloc(sizeof(double) * (Baptisiyina_member));
+        double *buf_i = (double*)malloc(sizeof(double) * (Baptisiyina_member));
+        double *buf_O = (double*)malloc(sizeof(double) * (Baptisiyina_member));
+        double *buf_o = (double*)malloc(sizeof(double) * (Baptisiyina_member));
+        double *buf_f = (double*)malloc(sizeof(double) * (Baptisiyina_member));
 
-        if (ptr_a == end_a) continue; // 空行スキップ
-
-        // 時間を一時ファイルに保存 (後で $TIMES ブロックにする)
-        fprintf(ftemp_times, "%.6e\n", t_val);
-
-        ptr_a = end_a;
-        ptr_e = end_e;
-
-        //　粒子IDのカウンター
-        int particle_id = 0;
-
-        // 2列目以降：粒子データ (a, e)
-        while (1) {
-            double val_a = strtod(ptr_a, &end_a);
-            if (ptr_a == end_a) break; // 行末
-            ptr_a = end_a;
-
-            double val_e = strtod(ptr_e, &end_e);
-            if (ptr_e == end_e) break; 
-            ptr_e = end_e;
-
-            // ファイルに書き込み (nanもそのまま書く)
-            fprintf(fout, "%.6e %.6e %d\n", val_a, val_e, particle_id);
-            particle_id++; // 次の粒子のためにIDを増やす
+        // 2. バッファを "NaN" (データなし) で初期化
+        // これにより、削除された粒子があった場合、その列には "nan" が出力されます
+        for(int k=0; k<Baptisiyina_member; k++){
+            buf_a[k] = NAN;
+            buf_e[k] = NAN;
+            buf_i[k] = NAN;
+            buf_O[k] = NAN;
+            buf_o[k] = NAN;
+            buf_f[k] = NAN;
         }
 
-        // ブロック区切り (2行の空行)
-        fprintf(fout, "\n\n");
-        steps++;
+        // 3. 現在存在する粒子だけを計算し、hashの位置に格納
+        struct reb_particle sun = r->particles[0];
+        for(int i = r->N_active; i < r->N; i++){
+            struct reb_particle p = r->particles[i];
+            
+            //hash をインデックスとして使う
+            int id = (int)p.hash - 1; 
+
+            //hashが範囲外でないかチェック
+            if(id >= 0 && id < Baptisiyina_member){
+                struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun);
+                buf_a[id] = o.a / au;
+                buf_e[id] = o.e;
+                buf_i[id] = o.inc * (180.0 / M_PI);
+                buf_O[id] = o.Omega * (180.0 / M_PI);
+                buf_o[id] = o.omega * (180.0 / M_PI);
+                buf_f[id] = o.f * (180.0 / M_PI);
+            }
+        }
+
+        FILE* fa = fopen("N1Pda10.txt","a");
+        FILE* fe = fopen("N1Pde10.txt","a");
+        FILE* fi = fopen("N1Pdi10.txt","a");
+        FILE* fO = fopen("N1PdO10.txt","a");
+        FILE* fo = fopen("N1Pdw10.txt","a");
+        FILE* ff = fopen("N1Pdf10.txt","a");
+
+        FILE* Pa = fopen("Planeta.txt","a");
+        FILE* Pe = fopen("Planete.txt","a");
+        FILE* Pi = fopen("Planeti.txt","a");
+        FILE* PO = fopen("PlanetO.txt","a");
+        FILE* Po = fopen("Planetw.txt","a");
+        FILE* Pf = fopen("Planetif.txt","a");
+
+        fprintf(fa, "%f ", r->t);
+        fprintf(fe, "%f ", r->t);
+        fprintf(fi, "%f ", r->t);
+        fprintf(fO, "%f ", r->t);
+        fprintf(fo, "%f ", r->t);
+        fprintf(ff, "%f ", r->t);
+        fprintf(Pa, "%f ", r->t);
+        fprintf(Pe, "%f ", r->t);
+        fprintf(Pi, "%f ", r->t);
+        fprintf(PO, "%f ", r->t);
+        fprintf(Po, "%f ", r->t);
+        fprintf(Pf, "%f ", r->t);
+
+        for(int k = 0; k<Baptisiyina_member; k++){
+            fprintf(fa, "%f ", buf_a[k]);
+            fprintf(fe, "%f ", buf_e[k]);
+            fprintf(fi, "%f ", buf_i[k]);
+            fprintf(fO, "%f ", buf_O[k]);
+            fprintf(fo, "%f ", buf_o[k]);
+            fprintf(ff, "%f ", buf_f[k]);
+        }
+        fprintf(fa, "\n");
+        fprintf(fe, "\n");
+        fprintf(fi, "\n");
+        fprintf(fO, "\n");
+        fprintf(fo, "\n");
+        fprintf(ff, "\n");
+
+    //ここで削除処理を行う
+    struct reb_particle sun_check = r->particles[0];
+    // 後ろからループすることで、削除しても手前のインデックスに影響しないようにする
+    for (int i = r->N - 1; i >= r->N_active; i--) {
+        struct reb_particle p = r->particles[i];
+        struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun_check);
+        if (o.e >= 1.0) {
+            reb_simulation_remove_particle(r, i, 0);
+        }
     }
 
-    // --- データブロックの終了 ---
-    fprintf(fout, "EOD\n\n");
+        for(int i = 1; i < r->N_active; i++){
+            struct reb_particle p = r->particles[i];
+            struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun);
+            fprintf(Pa, "%f ", o.a / au);
+            fprintf(Pe, "%f ", o.e);
+            fprintf(Pi, "%f ", o.inc * (180.0 / M_PI));
+            fprintf(PO, "%f ", o.Omega * (180.0 / M_PI));
+            fprintf(Po, "%f ", o.omega * (180.0 / M_PI));
+            fprintf(Pf, "%f ", o.f * (180.0 / M_PI));
+        }
+        fprintf(Pa, "\n");
+        fprintf(Pe, "\n");
+        fprintf(Pi, "\n");
+        fprintf(PO, "\n");
+        fprintf(Po, "\n");
+        fprintf(Pf, "\n");
 
-    // --- 時間データブロックの作成 ---
-    fprintf(fout, "$TIMES << EOD\n");
-    rewind(ftemp_times); // 一時ファイルの先頭に戻る
-    char time_buf[256];
-    while (fgets(time_buf, sizeof(time_buf), ftemp_times) != NULL) {
-        fprintf(fout, "%s", time_buf);
+        fclose(fa);
+        fclose(fe);
+        fclose(fi);
+        fclose(fO);
+        fclose(fo);
+        fclose(ff);
+        fclose(Pa);
+        fclose(Pe);
+        fclose(Pi);
+        fclose(PO);
+        fclose(Po);
+        fclose(Pf);
+
+        FILE* fyark = fopen("Yarkovsky_Check.txt", "a");
+
+        for(int i = r->N_active; i < r->N; i++){
+            struct reb_particle p = r->particles[i];
+            struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun);
+
+            // --- 既存の計算 ---
+            double dx = p.x - sun.x;
+            double dy = p.y - sun.y;
+            double dz = p.z - sun.z;
+            double dist_m = sqrt(dx*dx + dy*dy + dz*dz);
+            double v_mag = sqrt(p.vx*p.vx + p.vy*p.vy + p.vz*p.vz);
+            
+            // T0, Cd, ed の計算
+            double T0 = pow((1 - Ab) / (4 * sqrt(1 - o.e * o.e) * eps * sigma) * Fe * pow(au / o.a, 2), 0.25);
+            double omega = 2 * M_PI / P;
+            double Cd, ed;
+            get_amplitude_and_lag(omega, T0, &Cd, &ed, p.r);
+
+            // --- 加速度ベクトルの計算 ---
+            double b_vec[3] = {bx, by, bz};
+            unorm(b_vec, b_vec);
+
+            double rsu[3] = {dx/dist_m, dy/dist_m, dz/dist_m};
+            double Fs = Fe * pow(au / dist_m, 2);
+
+            double v1[3], v2[3], v_temp[3];
+            vcrss(b_vec, rsu, v1);
+            vcrss(rsu, b_vec, v_temp);
+            vcrss(b_vec, v_temp, v2);
+
+            // 成分の計算 (ここでの計算結果を出力します)
+            double ax_yark = Cd * Fs * (sin(ed) * v1[0] + cos(ed) * v2[0]);
+            double ay_yark = Cd * Fs * (sin(ed) * v1[1] + cos(ed) * v2[1]);
+            double az_yark = Cd * Fs * (sin(ed) * v1[2] + cos(ed) * v2[2]);
+
+            // 大きさの計算
+            double accel_mag = sqrt(ax_yark*ax_yark + ay_yark*ay_yark + az_yark*az_yark);
+
+            // --- ファイル出力 ---
+            // 末尾に accel_mag, ax_yark, ay_yark, az_yark を追加
+            fprintf(fyark, "%.5e %d %.5e %.5e %.5f %.5e %.5f %.5e %.5e %.5e %.5e\n", 
+                    r->t / (y*d),       // Time
+                    (int)p.hash,        // ID
+                    dist_m / au,        // Distance from Sun
+                    v_mag,              // Velocity
+                    T0,                 // T0
+                    Cd,                 // Cd
+                    ed,                 // ed
+                    accel_mag,          // |a|
+                    ax_yark,            // ax  <-- 追加
+                    ay_yark,            // ay  <-- 追加
+                    az_yark             // az  <-- 追加
+            );
+        }
+        fclose(fyark);
+
+        free(buf_a);
+        free(buf_e);
+        free(buf_i);
+        free(buf_O);
+        free(buf_o);
+        free(buf_f);
+        //struct reb_orbit o = reb_orbit_from_particle(r->G, r->particles[1], r->particles[0]);
+        //printf("%e %e %e %e\n", r->t / (y * d), r->particles[1].x / au, r->particles[1].y / au, r->particles[1].z / au);
     }
-    fprintf(fout, "EOD\n\n");
-    fclose(ftemp_times);
+}
 
-    // --- アニメーションループ設定 ---
-    fprintf(fout, "# Animation Settings\n");
-    fprintf(fout, "num_steps = %d\n", steps);
-    
-    // 時間データを配列にロード
-    fprintf(fout, "array TimeArray[num_steps]\n");
-    fprintf(fout, "stats $TIMES using (TimeArray[$0+1] = $1) nooutput\n");
-    fprintf(fout, "\n");
-    
-    // 単位変換定数 (秒 -> 年)
-    fprintf(fout, "sec_in_year = 365.25 * 86400.0\n");
+// ★修正した関数★
+void yarkovsky_forces(struct reb_simulation *r)
+{
+    double rs[3], T0, omega, ed, Cd, Fs, rsu[3], v1[3], v2[3];
+    //double n, es, Cs, t0, f1, f2, rs0[3], rs0u[3];
 
-    fprintf(fout, "do for [i=1:num_steps] {\n");
-    // 時間の計算
-    fprintf(fout, "    t_sec = TimeArray[i]\n");
-    fprintf(fout, "    t_yrs = t_sec / sec_in_year\n");
-    fprintf(fout, "    t_myr = t_yrs / 1000000.0\n");
-    
-    // タイトルの更新 (例: Time: 1.50 Myr)
-    fprintf(fout, "    set title sprintf('Time: %%g Years (%%.2f Myr)', t_yrs, t_myr) font ',14'\n");
-    
-    // プロット (indexは0始まりなので i-1)
-    fprintf(fout, "    plot $DATA index (i-1) using 1:2:3 with points pt 7 ps 1.0 lc palette notitle, \\\n");
-    fprintf(fout, "         mq(x) notitle with lines ls 2 dt 2, \\\n");
-    fprintf(fout, "         eq(x) notitle with lines ls 3, \\\n");
-    fprintf(fout, "         eQ(x) notitle with lines ls 3\n");
+    struct reb_particle sun = r->particles[0];
+    for(int i = r->N_active; i < r->N; i++){
+    struct reb_particle p = r->particles[i];
+    struct reb_orbit o = reb_orbit_from_particle(r->G, p, sun);
 
-    fprintf(fout, "}\n");
-    
-    fprintf(fout, "set output\n"); // ファイルを閉じる
-    fprintf(fout, "print 'Animation saved to orbit_evolution.gif'\n");
+    if(o.e >= 1.0){
+        continue;
+    }// parabolic or hyperbolic orbit
 
-    printf("Done! 'animation.plt' generated (%d steps).\n", steps);
-    printf("Run: gnuplot animation.plt\n");
+    // rotational axis
+    b[0] = bx;
+    b[1] = by;
+    b[2] = bz;
+    unorm(b, b);
 
-    fclose(fa);
-    fclose(fe);
-    fclose(fout);
+    // current position
+    rs[0] = p.x - sun.x;
+    rs[1] = p.y - sun.y;
+    rs[2] = p.z - sun.z;
 
-    return 0;
+    // temperature
+    T0 = pow((1 - Ab) / (4 * sqrt(1 - o.e * o.e) * eps * sigma) * Fe * pow(au / o.a, 2), 0.25);
+
+    /* diurnal Yarkovsky acceleration */
+
+    double P;
+    P = 5 * 3600;
+    // rotational frequency [s^-1]
+    omega = 2 * M_PI / P;
+
+    get_amplitude_and_lag(omega, T0, &Cd, &ed, p.r);
+
+    Fs = Fe * pow(au / vnorm(rs), 2);
+    unorm(rs, rsu);
+    vcrss(b, rsu, v1);
+    vcrss(rsu, b, v2);
+    vcrss(b, v2, v2);
+
+    r->particles[i].ax += Cd * Fs * (sin(ed) * v1[0] + cos(ed) * v2[0]);
+    r->particles[i].ay += Cd * Fs * (sin(ed) * v1[1] + cos(ed) * v2[1]);
+    r->particles[i].az += Cd * Fs * (sin(ed) * v1[2] + cos(ed) * v2[2]);
+    }
+}
+
+    /* seasonal Yarkovsky acceleration */
+
+    // mean motion
+   /* n = o.n; 
+
+    get_amplitude_and_lag(n, T0, &Cs, &es, p.r);
+
+    // lag subtracted time
+    t0 = r->t - es / n; // 現在時刻からラグだけ遡った時間
+
+    // Update logs
+    for (int k = 0; k < size - 1; k++) // 古いデータを一つ前にシフト
+    {
+        tlog[i - r->N_active][k] = tlog[i - r->N_active][k + 1];
+        plog[i - r->N_active][k].x = plog[i - r->N_active][k + 1].x;
+        plog[i - r->N_active][k].y = plog[i - r->N_active][k + 1].y;
+        plog[i - r->N_active][k].z = plog[i - r->N_active][k + 1].z;
+    }
+    tlog[i - r->N_active][size - 1] = r->t; // 最新データを追加.    
+    plog[i - r->N_active][size - 1].x = rs[0];
+    plog[i - r->N_active][size - 1].y = rs[1];
+    plog[i - r->N_active][size - 1].z = rs[2];
+
+    // Find past position
+    int found = 0; // ★追加：見つかったかどうかのフラグ
+    for (int k = 0; k < size - 1; k++)
+    {
+        if (tlog[i - r->N_active][k] <= t0 && t0 <= tlog[i - r->N_active][k + 1])
+        {
+            f1 = (tlog[i - r->N_active][k + 1] - t0) / (tlog[i - r->N_active][k + 1] - tlog[i - r->N_active][k]);
+            f2 = (t0 - tlog[i - r->N_active][k]) / (tlog[i - r->N_active][k + 1] - tlog[i - r->N_active][k]);
+            rs0[0] = f1 * plog[i - r->N_active][k].x + f2 * plog[i - r->N_active][k + 1].x;
+            rs0[1] = f1 * plog[i - r->N_active][k].y + f2 * plog[i - r->N_active][k + 1].y;
+            rs0[2] = f1 * plog[i - r->N_active][k].z + f2 * plog[i - r->N_active][k + 1].z;
+            found = 1; // ★追加：計算成功
+            break;
+        }
+    }
+
+    // ★修正：計算できた場合のみ力を加算する
+    if (found)
+    {
+        Fs = Fe * pow(au / vnorm(rs0), 2);
+        unorm(rs0, rs0u);
+
+        r->particles[i].ax += Cs * Fs * vdot(b, rs0u) * b[0];
+        r->particles[i].ay += Cs * Fs * vdot(b, rs0u) * b[1];
+        r->particles[i].az += Cs * Fs * vdot(b, rs0u) * b[2];
+    }
+    */
+
+
+void get_amplitude_and_lag(double nu, double T0, double *amp, double *lag, double rad)
+{
+    double x, c1, C1, C2, C3;
+
+    x = rad * sqrt(0.5 * nu * rho * Cp / kappa);
+    c1 = 2 * (1 - 2 * eps * sigma * pow(T0, 3) * rad / kappa);
+
+    // sinh(2x)等で割って数値安定化させた式を使用
+    C1 = 2 * x * (c1 + x * x) + 2 * x * (c1 - x * x) * sin(2 * x) / sinh(2 * x) - c1 * (1 + 2 * x * x) / tanh(2 * x) + c1 * (1 - 2 * x * x) * cos(2 * x) / sinh(2 * x);
+    C2 = 2 * x * x * (x + x * sin(2 * x) / sinh(2 * x) + cos(2 * x) / sinh(2 * x) - 1 / tanh(2 * x));
+    C3 = (c1 * c1 * (1 + 2 * x * x) + 4 * pow(x, 4)) / tanh(2 * x) + (c1 * c1 * (-1 + 2 * x * x) - 4 * pow(x, 4)) * cos(2 * x) / sinh(2 * x) - 2 * c1 * x * (c1 + 2 * x * x) - 2 * c1 * x * (c1 - 2 * x * x) * sin(2 * x) / sinh(2 * x);
+
+    *amp = 4 * (1 - Ab) * eps * sigma * pow(T0, 3)/ (3 * kappa * c * rho) * sqrt(C1 * C1 + C2 * C2) / C3;
+    *lag = asin(1 / sqrt(pow(C1 / C2, 2) + 1));
+}
+
+void unorm(double vin[3], double vout[3])
+{
+    double vmag;
+
+    vmag = vnorm(vin);
+    if (vmag > 0)
+    {
+        vout[0] = vin[0] / vmag;
+        vout[1] = vin[1] / vmag;
+        vout[2] = vin[2] / vmag;
+    }
+    else
+    {
+        vout[0] = 0;
+        vout[1] = 0;
+        vout[2] = 0;
+    }
+}
+
+void vcrss(double v1[3], double v2[3], double vout[3])
+{
+    double vtemp[3];
+
+    vtemp[0] = v1[1] * v2[2] - v1[2] * v2[1];
+    vtemp[1] = v1[2] * v2[0] - v1[0] * v2[2];
+    vtemp[2] = v1[0] * v2[1] - v1[1] * v2[0];
+    vout[0] = vtemp[0];
+    vout[1] = vtemp[1];
+    vout[2] = vtemp[2];
+}
+
+double vdot(double v1[3], double v2[3])
+{
+    return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+}
+
+double vnorm(double v[3])
+{
+    return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+int GetRandom(int min, int max)
+{
+    return min + (int)(rand() * (max - min + 1.0) / (1.0 + RAND_MAX));
 }
