@@ -1,0 +1,22 @@
+reset
+
+set yrange [0:2.3]
+set xrange [0:5049216000000000]
+
+set title "Retrograde Rotation\nR = 10[m]"
+set xlabel "Time[s]"
+set ylabel "Semi-major axis[AU]"
+
+set title font "Arial,20"
+set xlabel font "Arial,20"
+set ylabel font "Arial,20"
+
+#ticsはメモリ文字
+set tics font "Arial,13"
+#keyは凡例
+set key font"Arial,15"
+
+set title offset 30,-6
+unset key
+
+plot for [i=2:21] 'N20Rda10.txt' using 1:i with points title"R=10"

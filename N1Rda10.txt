@@ -1,0 +1,7 @@
+reset
+
+#set yrange [0:2.3]
+set xrange [0:5049216000000000]
+set ylabel "Eccentiricity"
+set xlabel "Time(s)"
+plot for [i=2:21] 'N20Rde10.txt' using 1:i with points 

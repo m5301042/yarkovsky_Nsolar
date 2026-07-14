@@ -1,0 +1,70 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+// ==========================================
+// 設定エリア：ここを変更するだけで別の形式に対応できます
+// ==========================================
+#define FILE1_NAME "N20Rde10co.txt"  // 1つ目のファイル名
+#define FILE2_NAME "N20Rde10.txt"    // 2つ目のファイル名
+#define OUT_NAME   "N40Rde10.txt" // 出力ファイル名
+
+#define COLS_FILE1 20  // 1つ目のファイルのデータ列数（今回は20）
+#define COLS_FILE2 20  // 2つ目のファイルのデータ列数（ここを40にすれば40個に対応）
+// ==========================================
+
+int main() {
+    FILE *fp1, *fp2, *fp_out;
+    char buffer[128]; // 読み込み用の一時バッファ
+    int i;
+
+    // ファイルを開く
+    fp1 = fopen(FILE1_NAME, "r");
+    fp2 = fopen(FILE2_NAME, "r");
+    fp_out = fopen(OUT_NAME, "w");
+
+    // エラーチェック
+    if (fp1 == NULL) { printf("エラー: %s を開けませんでした。\n", FILE1_NAME); return 1; }
+    if (fp2 == NULL) { printf("エラー: %s を開けませんでした。\n", FILE2_NAME); return 1; }
+    if (fp_out == NULL) { printf("エラー: %s を作成できませんでした。\n", OUT_NAME); return 1; }
+
+    printf("処理を開始します... (File1: %d列 + File2: %d列)\n", COLS_FILE1, COLS_FILE2);
+
+    // データの読み込みと結合ループ
+    // fp1から「タイムスタンプ」が読み取れる限り繰り返す
+    while (fscanf(fp1, "%s", buffer) != EOF) {
+        
+        // 1. タイムスタンプを出力ファイルに書き込む
+        fprintf(fp_out, "%s", buffer);
+
+        // 2. ファイル1から指定された列数分データを読み込んで書き込む
+        for (i = 0; i < COLS_FILE1; i++) {
+            if (fscanf(fp1, "%s", buffer) != EOF) {
+                fprintf(fp_out, " %s", buffer);
+            }
+        }
+
+        // 3. ファイル2のタイムスタンプを読み飛ばす（同期確認用）
+        if (fscanf(fp2, "%s", buffer) == EOF) {
+            break; // ファイル2が先に終わっていたら終了
+        }
+
+        // 4. ファイル2から指定された列数分データを読み込んで書き込む
+        for (i = 0; i < COLS_FILE2; i++) {
+            if (fscanf(fp2, "%s", buffer) != EOF) {
+                fprintf(fp_out, " %s", buffer);
+            }
+        }
+
+        // 改行を入れる
+        fprintf(fp_out, "\n");
+    }
+
+    // ファイルを閉じる
+    fclose(fp1);
+    fclose(fp2);
+    fclose(fp_out);
+
+    printf("結合が完了しました: %s\n", OUT_NAME);
+
+    return 0;
+}
